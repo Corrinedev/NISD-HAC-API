@@ -139,9 +139,8 @@ class Account(private var username: String, private var password: String) {
 
     fun getUsername(): String = username
 
-    // -------------------------------------------------------------------------
-    // Core fetch helpers
-    // -------------------------------------------------------------------------
+
+    // End API
 
     private fun fetchAssignmentsPage(quarter: Int?): String {
         val html = get(ASSIGNMENTS_URL, referer = ASSIGNMENTS_URL, cookies = cookies)
@@ -159,10 +158,6 @@ class Account(private var username: String, private var password: String) {
     }
 
     private fun fetchTranscript(): String = get(TRANSCRIPT_URL, referer = TRANSCRIPT_URL, cookies = cookies)
-
-    // -------------------------------------------------------------------------
-    // Parsing helpers
-    // -------------------------------------------------------------------------
 
     private fun initializeClasses(doc: Document): Pair<List<Double>, List<String>> {
         val grades = doc.select("span[id~=lblHdrAverage]")

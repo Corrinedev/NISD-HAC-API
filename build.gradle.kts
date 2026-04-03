@@ -1,9 +1,10 @@
 plugins {
     kotlin("jvm") version "2.3.0"
+    `maven-publish`
 }
 
-group = "kotlin"
-version = "1.0"
+group = "com.github.Corrinedev"
+version = "1.0.0"
 
 repositories {
     mavenCentral()
@@ -15,4 +16,12 @@ dependencies {
 
 kotlin {
     jvmToolchain(21)
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+        }
+    }
 }
