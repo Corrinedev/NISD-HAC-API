@@ -4,7 +4,7 @@ NISD-HAC-API, HACHelper or HAC Lib (name pending) is a JVM library written in Ko
 
 It directly scrapes HTML data from HAC using JSoup (included as a transitive dependency if you use Jitpack, if using the local .jar from release please includ JSoup yourself).
 
-### Include with Jitpack
+### Include with Jitpack (https://jitpack.io/#Corrinedev/NISD-HAC-API)
 
 ```kotlin
 // settings.gradle.kts
