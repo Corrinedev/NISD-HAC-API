@@ -48,28 +48,33 @@ class Account(private var username: String, private var password: String) {
         cookies.clear()
         login()
     }
+    
+    fun resetCache() {
+        cachedTranscript = null
+        cachedAssignments.clear()
+    }
 
     // -------------------------------------------------------------------------
     // Public API
     // -------------------------------------------------------------------------
 
     fun returnCurrentGrades(): Pair<List<Double>, List<String>> {
-        val doc = Jsoup.parse(fetchAssignmentsPage(quarter = null))
+        val doc = getCachedAssignments(quarter = null)
         return initializeClasses(doc)
     }
 
     fun returnQuarterGrade(quarter: Int): Pair<List<Double>, List<String>> {
-        val doc = Jsoup.parse(fetchAssignmentsPage(quarter = quarter))
+        val doc = getCachedAssignments(quarter = quarter)
         return initializeClasses(doc)
     }
 
     fun returnCurrentAssignmentsDf(): List<List<Map<String, String>>> {
-        val doc = Jsoup.parse(fetchAssignmentsPage(quarter = null))
+        val doc = getCachedAssignments(quarter = null)
         return extractTableListFromDoc(doc)
     }
 
     fun returnQuarterAssignmentsDf(quarter: Int): List<List<Map<String, String>>> {
-        val doc = Jsoup.parse(fetchAssignmentsPage(quarter = quarter))
+        val doc = getCachedAssignments(quarter = quarter)
         return extractTableListFromDoc(doc)
     }
 
@@ -77,13 +82,35 @@ class Account(private var username: String, private var password: String) {
         returnCurrentAssignmentsDf()
 
     fun returnQuarterAssignmentsHtml(quarter: Int? = null): List<Map<String, Any>> {
-        val doc = Jsoup.parse(fetchAssignmentsPage(quarter = quarter))
+        val doc = getCachedAssignments(quarter = quarter)
         return parseHacData(doc)
     }
 
     fun returnWeightedGpa(): Float {
         return _returnRegistrationTableContents()[0]
             ?.text()?.trim()?.filter { it.isDigit() || it == '.'}?.toFloat() ?: -1f
+    }
+
+    fun returnEstimatedQuarterGPA(quarter: Int? = null, weighted: Boolean = true): Double {
+        val quarterMap = returnQuarterAssignmentsHtml(quarter)
+        val weightedAverages = mutableListOf<Double>()
+        for (map in quarterMap) {
+            val extra = if(weighted) getExtraPointsForClass(map["class"] as String) else 0.0
+            weightedAverages.add((map["average"] as String).toDouble() + extra)
+        }
+        return weightedAverages.average()
+    }
+
+    fun getExtraPointsForClass(str: String): Double {
+        return if(str.contains("AP ")) 8.0
+        else if (str.contains(" AP")) 5.0
+        else if (str.contains("H ")) 5.0
+        else if (str.contains(" H")) 5.0
+        else if (str.contains("Adv ")) 5.0
+        else if (str.contains(" Adv")) 5.0
+        else if (str.contains("Advanced ")) 5.0
+        else if (str.contains(" Advanced")) 5.0
+        else { 0.0 }
     }
 
     fun returnFullRank(): String {
@@ -112,7 +139,7 @@ class Account(private var username: String, private var password: String) {
     }
 
     private fun _returnRegistrationTableContents(): Elements {
-        val doc = Jsoup.parse(fetchTranscript())
+        val doc = getTranscript()
         return doc
             .getElementById("MainContent")
             ?.getElementById("fmMain")
@@ -122,7 +149,7 @@ class Account(private var username: String, private var password: String) {
     }
 
     private fun _returnContactTableContents(): Elements {
-        val doc = Jsoup.parse(fetchTranscript())
+        val doc = getTranscript()
 
         return doc.getElementById("MainContent")
             ?.getElementById("fmMain")
@@ -141,10 +168,18 @@ class Account(private var username: String, private var password: String) {
 
 
     // End API
+    
+    private val cachedAssignments = mutableMapOf<Int, Document>()
+
+    fun getCachedAssignments(quarter: Int? = null): Document {
+        val quarter: Int = quarter ?: -1
+        return cachedAssignments[quarter] ?: Jsoup.parse(fetchAssignmentsPage(quarter)).also { cachedAssignments[quarter] = it }
+    }
 
     private fun fetchAssignmentsPage(quarter: Int?): String {
         val html = get(ASSIGNMENTS_URL, referer = ASSIGNMENTS_URL, cookies = cookies)
-        if (quarter == null) return html
+        if (quarter == null || quarter == -1 /* placeholder for default html used for cached map indexing in #getCachedAssignments */)
+            return html
 
         val doc = Jsoup.parse(html)
         val quarterValue = getQuarterValue(doc, quarter)
@@ -155,6 +190,12 @@ class Account(private var username: String, private var password: String) {
             put("__EVENTTARGET", "ctl00\$plnMain\$btnRefreshView")
         }
         return post(ASSIGNMENTS_URL, payload, referer = ASSIGNMENTS_URL, cookies = cookies)
+    }
+
+    private var cachedTranscript: Document? = null
+
+    fun getTranscript(): Document {
+        return cachedTranscript ?: Jsoup.parse(fetchTranscript()).also { cachedTranscript = it }
     }
 
     private fun fetchTranscript(): String = get(TRANSCRIPT_URL, referer = TRANSCRIPT_URL, cookies = cookies)
