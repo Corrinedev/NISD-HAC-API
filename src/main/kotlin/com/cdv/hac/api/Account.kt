@@ -4,6 +4,8 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.jsoup.select.Elements
+import javax.print.Doc
+import kotlin.collections.forEachIndexed
 
 class Account(private var username: String, private var password: String) {
 
@@ -96,14 +98,15 @@ class Account(private var username: String, private var password: String) {
         val weightedAverages = mutableListOf<Double>()
         for (map in quarterMap) {
             val extra = if(weighted) getExtraPointsForClass(map["class"] as String) else 0.0
-            weightedAverages.add((map["average"] as String).toDouble() + extra)
+            if((map["average"] as String).isNotEmpty())
+                weightedAverages.add((map["average"] as String).toDouble() + extra)
         }
         return weightedAverages.average()
     }
 
     fun getExtraPointsForClass(str: String): Double {
         return if(str.contains("AP ")) 8.0
-        else if (str.contains(" AP")) 5.0
+        else if (str.contains(" AP")) 8.0
         else if (str.contains("H ")) 5.0
         else if (str.contains(" H")) 5.0
         else if (str.contains("Adv ")) 5.0
@@ -170,6 +173,25 @@ class Account(private var username: String, private var password: String) {
     // End API
     
     private val cachedAssignments = mutableMapOf<Int, Document>()
+
+    fun getClassesFromDocument(quarter: Int? = null): Map<Int, Class> {
+        val classMap = mutableMapOf<Int, Class>()
+        val quarter: Int = quarter ?: -1
+        val doc = Jsoup.parse(fetchAssignmentsPage(quarter))
+
+        val data = parseHacData(doc)
+
+        data.forEachIndexed { index, map ->
+            //classMap[index] = Class(
+            //    map["class"] as? String ?: "",
+            //        (map["assignments"] as List<Map<String, String>>).map { e -> Assignment(e["title"], e["date"], e[""]) }
+            //)
+
+            println(map)
+        }
+
+        return mutableMapOf()
+    }
 
     fun getCachedAssignments(quarter: Int? = null): Document {
         val quarter: Int = quarter ?: -1
@@ -272,22 +294,46 @@ class Account(private var username: String, private var password: String) {
 
                 val scoreStr = cells[4]
                 if (scoreStr.isBlank()) return@mapNotNull null
-
+                println(cells)
                 mapOf(
-                    "date"     to cells[0],
+                    "dateDue"     to cells[0],
+                    "dateAssigned"     to cells[1],
                     "title"    to cells[2],
                     "category" to category,
-                    "score"    to (scoreStr.toDoubleOrNull()
-                        ?: scoreStr.substringBefore(".").toDoubleOrNull()
-                        ?: -1.0)
+                    "score"    to getSafeDoubleFromString(cells[4]),
+                    "totalPoints" to getSafeDoubleFromString(cells[5]),
+                    "weight" to getSafeDoubleFromString(cells[6]),
+                    "weightedScore" to getSafeDoubleFromString(cells[7]),
+                    "weightedTotalPoints" to getSafeDoubleFromString(cells[8]),
+                    "averageScore" to getSafeDoubleFromString(cells[9]),
                 )
+            }
+
+            val categories = classDiv.select("span[class~=LabelCatogery]").mapNotNull { row ->
+                val cells = row.select("td").map { it.text().trim() }
+                val trimmedCells = cells.subList(6, cells.size - 1)
+                val map: List<Map<String, String>> = mutableListOf()
+
+                trimmedCells.chunked(cells.size / 6) { o ->
+                    map + mapOf(
+                        "name" to o[0]
+                    )
+                }
+                println(trimmedCells)
             }
 
             mapOf(
                 "class"       to className,
                 "average"     to classAvg,
-                "assignments" to assignments
+                "assignments" to assignments,
+                "categories" to categories
             )
         }
+    }
+
+    fun getSafeDoubleFromString(str: String): Double {
+       return str.toDoubleOrNull()
+           ?: str.substringBefore(".").toDoubleOrNull()
+           ?: -1.0
     }
 }
