@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.github.Corrinedev"
-version = "1.0.0"
+version = "2.0.0"
 
 repositories {
     mavenCentral()
@@ -24,4 +24,8 @@ publishing {
             from(components["java"])
         }
     }
+}
+
+tasks.named<Test>("test") {
+    failOnNoDiscoveredTests = false
 }
