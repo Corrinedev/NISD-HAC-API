@@ -7,10 +7,11 @@ data class Class(
     val assignments: List<Assignment>,
     val categories: List<Category>,
     val classPeriod: Int,
-    val displayedAverage: Double
-) {
-
-}
+    val displayedAverage: Double,
+    val teacher: Teacher,
+    val room: String,
+    val classId: Int
+)
 
 data class Assignment(
     val name: String,
@@ -26,3 +27,5 @@ data class Assignment(
 )
 
 data class Category(val name: String, val points: Double)
+
+data class Teacher(val name: String, val email: String)

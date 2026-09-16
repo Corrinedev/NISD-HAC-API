@@ -10,10 +10,7 @@ fun main() {
     print("Input pass: ") ; val pass = input.nextLine()
 
     val acc = Account(user, pass)
-    //print("Current Assignments: ") ; println(acc.returnCurrentAssignmentsHtml())
 
-    acc.getClassesFromDocument()
-
-    //println("Time Elapsed: ${System.currentTimeMillis() - preTime2}ms")
+    println(acc.getClasses(1))
 }
 

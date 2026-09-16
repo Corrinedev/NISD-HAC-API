@@ -2,19 +2,20 @@ package com.cdv.hac.api
 
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
 import org.jsoup.select.Elements
-import javax.print.Doc
-import kotlin.collections.forEachIndexed
+import java.util.*
+
+const val ASSIGNMENTS_URL = "https://hac.nisd.net/HomeAccess/Content/Student/Assignments.aspx"
+const val CLASSES_URL     = "https://hac.nisd.net/HomeAccess/Content/Student/Classes.aspx"
+const val TRANSCRIPT_URL  = "https://hac.nisd.net/HomeAccess/Content/Student/Registration.aspx"
+const val LOGIN_URL       = "https://hac.nisd.net/HomeAccess/Account/LogOn?ReturnUrl=%2fHomeAccess%2f"
+const val BASE_URL        = "https://hac.nisd.net"
 
 class Account(private var username: String, private var password: String) {
 
     private val cookies = mutableMapOf<String, String>()
 
-    private val ASSIGNMENTS_URL = "https://hac.nisd.net/HomeAccess/Content/Student/Assignments.aspx"
-    private val TRANSCRIPT_URL  = "https://hac.nisd.net/HomeAccess/Content/Student/Registration.aspx"
-    private val LOGIN_URL       = "https://hac.nisd.net/HomeAccess/Account/LogOn?ReturnUrl=%2fHomeAccess%2f"
-    private val BASE_URL        = "https://hac.nisd.net"
+
 
     init { login() }
 
@@ -60,32 +61,8 @@ class Account(private var username: String, private var password: String) {
     // Public API
     // -------------------------------------------------------------------------
 
-    fun returnCurrentGrades(): Pair<List<Double>, List<String>> {
-        val doc = getCachedAssignments(quarter = null)
-        return initializeClasses(doc)
-    }
-
-    fun returnQuarterGrade(quarter: Int): Pair<List<Double>, List<String>> {
-        val doc = getCachedAssignments(quarter = quarter)
-        return initializeClasses(doc)
-    }
-
-    fun returnCurrentAssignmentsDf(): List<List<Map<String, String>>> {
-        val doc = getCachedAssignments(quarter = null)
-        return extractTableListFromDoc(doc)
-    }
-
-    fun returnQuarterAssignmentsDf(quarter: Int): List<List<Map<String, String>>> {
-        val doc = getCachedAssignments(quarter = quarter)
-        return extractTableListFromDoc(doc)
-    }
-
-    fun returnCurrentAssignmentsHtml(): List<List<Map<String, String>>> =
-        returnCurrentAssignmentsDf()
-
-    fun returnQuarterAssignmentsHtml(quarter: Int? = null): List<Map<String, Any>> {
-        val doc = getCachedAssignments(quarter = quarter)
-        return parseHacData(doc)
+    fun getClasses(quarter: Int): List<Class> {
+        return cachedAssignments.getOrPut(quarter) { getClassesFromDocument(quarter) }
     }
 
     fun returnWeightedGpa(): Float {
@@ -93,13 +70,13 @@ class Account(private var username: String, private var password: String) {
             ?.text()?.trim()?.filter { it.isDigit() || it == '.'}?.toFloat() ?: -1f
     }
 
-    fun returnEstimatedQuarterGPA(quarter: Int? = null, weighted: Boolean = true): Double {
-        val quarterMap = returnQuarterAssignmentsHtml(quarter)
+    fun returnEstimatedQuarterGPA(quarter: Int, weighted: Boolean = true): Double {
+        val classes = getClasses(quarter)
         val weightedAverages = mutableListOf<Double>()
-        for (map in quarterMap) {
-            val extra = if(weighted) getExtraPointsForClass(map["class"] as String) else 0.0
-            if((map["average"] as String).isNotEmpty())
-                weightedAverages.add((map["average"] as String).toDouble() + extra)
+        for ((name, _, _, _, displayedAverage) in classes) {
+            val extra = if(weighted) getExtraPointsForClass(name) else 0.0
+            if(displayedAverage != 0.0)
+                weightedAverages.add(displayedAverage + extra)
         }
         return weightedAverages.average()
     }
@@ -138,7 +115,120 @@ class Account(private var username: String, private var password: String) {
     }
 
     fun returnFullAddress(): String {
-        return _returnContactTableContents().first.getElementsByTag("tr").first()?.getElementsByTag("td")[0]?.text()?.split(',')[0]!!
+        return _returnContactTableContents().first()?.getElementsByTag("tr")?.first()?.getElementsByTag("td")[0]?.text()?.split(',')[0] ?: ""
+    }
+
+    fun returnCollegeGpa(): Float {
+        return (returnWeightedGpa() / 100) * 4.0f
+    }
+
+    fun getUsername(): String = username
+
+
+    // End API
+    
+    private val cachedAssignments = mutableMapOf<Int, List<Class>>()
+
+    private fun getClassesFromDocument(quarter: Int? = null): List<Class> {
+        val classes = mutableListOf<Class>()
+        val quarter: Int = quarter ?: -1
+        val doc = Jsoup.parse(fetchAssignmentsPage(quarter))
+        val scheduleDoc = Jsoup.parse(fetchClassesPage())
+        val data = parseHacData(doc)
+
+        val scheduleInfo = mutableMapOf<String, Map<String, Any>>()
+
+        scheduleDoc.selectFirst("table[id~=plnMain_dgSchedule]")?.run {
+            select("tr.sg-asp-table-data-row").mapNotNull { row ->
+                val raw = row.select("td")
+                val rawstr = raw.toString()
+                val email = rawstr.substring(rawstr.indexOfFirst { c-> c == ':' } + 1, rawstr.length - 1).let { str -> str.substring(0, str.indexOfFirst { c -> c == ' ' }) }
+                val cells = raw.map { it.text().trim() }
+
+                scheduleInfo[cells[1]] = mutableMapOf(
+                    "courseId" to cells[0].let { it.substring(0, it.indexOfFirst { c-> c == ' ' }).toIntOrNull() ?: -1 },
+                    "period" to cells[2].toInt(),
+                    "teacher" to Teacher(cells[3], email),
+                    "room" to cells[4]
+                )
+            }
+        }
+
+        data.forEach { map ->
+            val className = map["class"] as String
+
+            val categories = (map["categories"] as List<Map<String, Any>>).map { e -> Category(e["name"] as String, e["points"] as? Double ?: 0.0) }
+
+            val assignments = (map["assignments"] as List<Map<String, Any>>).map { e ->
+                Assignment(
+                    e["title"] as String,
+                    Date((e["dateDue"] as String).ifEmpty { "01/01/1999" }),
+                    Date((e["dateAssigned"] as String).ifEmpty { "01/01/1999" }),
+                    categories.find { c -> c.name == e["category"] as String } ?: Category("MISSING", 0.0),
+                    e["score"] as? Double ?: 0.0,
+                    e["totalPoints"] as? Double ?: 0.0,
+                    e["weightedScore"] as? Double ?: 0.0,
+                    e["weight"] as? Double ?: 0.0,
+                    e["weightedTotalPoints"] as? Double ?: 0.0,
+                    e["averageScore"] as? Double ?: 0.0,
+                    )
+            }
+
+            classes.add(Class(
+                className,
+                assignments,
+                categories,
+                scheduleInfo[className]?.get("period") as? Int ?: -1,
+                (map["average"] as String).toDoubleOrNull() ?: 0.0, (scheduleInfo[className]?.get("teacher")) as Teacher, scheduleInfo[className]?.get("room") as? String ?: "", scheduleInfo[className]?.get("courseId") as? Int ?: -1,
+            ))
+        }
+
+
+        return classes
+    }
+
+    private fun fetchAssignmentsPage(quarter: Int?): String {
+        val html = get(ASSIGNMENTS_URL, referer = ASSIGNMENTS_URL, cookies = cookies)
+        if (quarter == null || quarter == -1 /* placeholder for default html used for cached map indexing in #getCachedAssignments */)
+            return html
+
+        val doc = Jsoup.parse(html)
+        val quarterValue = getQuarterValue(doc, quarter)
+        val payload = getFormTokens(doc).toMutableMap().apply {
+            put("ctl00\$plnMain\$ddlReportCardRuns", quarterValue)
+            put("ctl00\$plnMain\$ddlClasses", "ALL")
+            put("ctl00\$plnMain\$ddlOrderBy", "Class")
+            put("__EVENTTARGET", "ctl00\$plnMain\$btnRefreshView")
+        }
+        return post(ASSIGNMENTS_URL, payload, referer = ASSIGNMENTS_URL, cookies = cookies)
+    }
+
+    private fun fetchClassesPage(): String {
+        val html = get(CLASSES_URL, referer = CLASSES_URL, cookies = cookies)
+
+        val doc = Jsoup.parse(html)
+        val payload = getFormTokens(doc)
+        return post(CLASSES_URL, payload, referer = CLASSES_URL, cookies = cookies)
+    }
+
+    private var cachedTranscript: Document? = null
+
+    fun getTranscript(): Document {
+        return cachedTranscript ?: Jsoup.parse(fetchTranscript()).also { cachedTranscript = it }
+    }
+
+    private fun fetchTranscript(): String = get(TRANSCRIPT_URL, referer = TRANSCRIPT_URL, cookies = cookies)
+
+    private fun getFormTokens(doc: Document): Map<String, String> =
+        listOf("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION",
+            "__EVENTTARGET", "__EVENTARGUMENT", "__LASTFOCUS")
+            .associateWith { doc.selectFirst("input[name=$it]")?.attr("value") ?: "" }
+
+    private fun getQuarterValue(doc: Document, quarter: Int): String {
+        val options = doc.select("select[name=ctl00\$plnMain\$ddlReportCardRuns] option")
+            .map { it.attr("value") }
+            .filter { it != "ALL" }
+        return if (quarter <= options.size) options[quarter - 1] else "$quarter-${getSchoolYear()}"
     }
 
     private fun _returnRegistrationTableContents(): Elements {
@@ -163,117 +253,6 @@ class Account(private var username: String, private var password: String) {
             ?.getElementsByTag("tbody")!!
     }
 
-    fun returnCollegeGpa(): Float {
-        return (returnWeightedGpa() / 100) * 4.0f
-    }
-
-    fun getUsername(): String = username
-
-
-    // End API
-    
-    private val cachedAssignments = mutableMapOf<Int, Document>()
-
-    fun getClassesFromDocument(quarter: Int? = null): Map<Int, Class> {
-        val classMap = mutableMapOf<Int, Class>()
-        val quarter: Int = quarter ?: -1
-        val doc = Jsoup.parse(fetchAssignmentsPage(quarter))
-
-        val data = parseHacData(doc)
-
-        data.forEachIndexed { index, map ->
-            //classMap[index] = Class(
-            //    map["class"] as? String ?: "",
-            //        (map["assignments"] as List<Map<String, String>>).map { e -> Assignment(e["title"], e["date"], e[""]) }
-            //)
-
-            println(map)
-        }
-
-        return mutableMapOf()
-    }
-
-    fun getCachedAssignments(quarter: Int? = null): Document {
-        val quarter: Int = quarter ?: -1
-        return cachedAssignments[quarter] ?: Jsoup.parse(fetchAssignmentsPage(quarter)).also { cachedAssignments[quarter] = it }
-    }
-
-    private fun fetchAssignmentsPage(quarter: Int?): String {
-        val html = get(ASSIGNMENTS_URL, referer = ASSIGNMENTS_URL, cookies = cookies)
-        if (quarter == null || quarter == -1 /* placeholder for default html used for cached map indexing in #getCachedAssignments */)
-            return html
-
-        val doc = Jsoup.parse(html)
-        val quarterValue = getQuarterValue(doc, quarter)
-        val payload = getFormTokens(doc).toMutableMap().apply {
-            put("ctl00\$plnMain\$ddlReportCardRuns", quarterValue)
-            put("ctl00\$plnMain\$ddlClasses",        "ALL")
-            put("ctl00\$plnMain\$ddlOrderBy",        "Class")
-            put("__EVENTTARGET", "ctl00\$plnMain\$btnRefreshView")
-        }
-        return post(ASSIGNMENTS_URL, payload, referer = ASSIGNMENTS_URL, cookies = cookies)
-    }
-
-    private var cachedTranscript: Document? = null
-
-    fun getTranscript(): Document {
-        return cachedTranscript ?: Jsoup.parse(fetchTranscript()).also { cachedTranscript = it }
-    }
-
-    private fun fetchTranscript(): String = get(TRANSCRIPT_URL, referer = TRANSCRIPT_URL, cookies = cookies)
-
-    private fun initializeClasses(doc: Document): Pair<List<Double>, List<String>> {
-        val grades = doc.select("span[id~=lblHdrAverage]")
-            .map { it.text().removePrefix("AVG ").trim().toDouble() }
-
-        val names = doc.select("a.sg-header-heading")
-            .map { el ->
-                val text = el.text().trim()
-                val idx  = text.indexOf("-")
-                if (idx >= 0) text.substring(idx + 4).trim() else text
-            }
-
-        return Pair(grades, names)
-    }
-
-    private fun getFormTokens(doc: Document): Map<String, String> =
-        listOf("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION",
-            "__EVENTTARGET", "__EVENTARGUMENT", "__LASTFOCUS")
-            .associateWith { doc.selectFirst("input[name=$it]")?.attr("value") ?: "" }
-
-    private fun getQuarterValue(doc: Document, quarter: Int): String {
-        val options = doc.select("select[name=ctl00\$plnMain\$ddlReportCardRuns] option")
-            .map { it.attr("value") }
-            .filter { it != "ALL" }
-        return if (quarter <= options.size) options[quarter - 1] else "$quarter-${getSchoolYear()}"
-    }
-
-    private fun extractTableListFromDoc(doc: Element): List<List<Map<String, String>>> {
-        return doc.select("table").mapNotNull { table ->
-            val rows    = table.select("tr")
-            if (rows.isEmpty()) return@mapNotNull null
-            val headers = rows[0].select("th, td").map { it.text().trim() }
-            if (headers.size != 10) return@mapNotNull null
-            rows.drop(1).map { row ->
-                val cells = row.select("td").map { it.text().trim() }
-                headers.zip(cells).toMap()
-            }
-        }
-    }
-
-    private fun extractTableList(table: Elements): List<List<Map<String, String>>> {
-        return table.mapNotNull { table ->
-            val rows    = table.select("tr")
-            if (rows.isEmpty()) return@mapNotNull null
-            val headers = rows[0].select("th, td").map { it.text().trim() }
-            if (headers.size != 10) return@mapNotNull null
-            rows.drop(1).map { row ->
-                val cells = row.select("td").map { it.text().trim() }
-                headers.zip(cells).toMap()
-            }
-        }
-    }
-
     fun parseHacData(doc: Document): List<Map<String, Any>> {
         return doc.select("div.AssignmentClass").map { classDiv ->
             val className = classDiv.selectFirst("a.sg-header-heading")
@@ -294,7 +273,7 @@ class Account(private var username: String, private var password: String) {
 
                 val scoreStr = cells[4]
                 if (scoreStr.isBlank()) return@mapNotNull null
-                println(cells)
+
                 mapOf(
                     "dateDue"     to cells[0],
                     "dateAssigned"     to cells[1],
@@ -309,17 +288,18 @@ class Account(private var username: String, private var password: String) {
                 )
             }
 
-            val categories = classDiv.select("span[class~=LabelCatogery]").mapNotNull { row ->
-                val cells = row.select("td").map { it.text().trim() }
-                val trimmedCells = cells.subList(6, cells.size - 1)
-                val map: List<Map<String, String>> = mutableListOf()
+            val categories: MutableList<Map<String, Any>> = mutableListOf()
+            classDiv.selectFirst("span[class~=LabelCatogery]").run {
+                if(this == null) return@run
+                val cells = select("td").map { it.text().trim() }
+                val trimmedCells = cells.subList(6, cells.size - 1).let { it.subList(0, it.indexOfFirst { s -> s == "Total Points:" }) }
 
-                trimmedCells.chunked(cells.size / 6) { o ->
-                    map + mapOf(
-                        "name" to o[0]
-                    )
+                trimmedCells.chunked(6) { o ->
+                    categories.add(mapOf(
+                        "name" to o[0],
+                        "points" to getSafeDoubleFromString(o[4])
+                    ))
                 }
-                println(trimmedCells)
             }
 
             mapOf(
