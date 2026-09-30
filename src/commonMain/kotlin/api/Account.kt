@@ -1,5 +1,6 @@
 package com.cdv.hac.api
 
+import com.fleeksoft.ksoup.Ksoup
 import com.fleeksoft.ksoup.nodes.Document
 import com.fleeksoft.ksoup.select.Elements
 
@@ -21,9 +22,9 @@ class Account(private var username: String, private var password: String) {
     // Auth
     // -------------------------------------------------------------------------
 
-    private fun login() {
+    private suspend fun login() {
         val loginPage = get(LOGIN_URL, cookies = cookies)
-        val doc = Jsoup.parse(loginPage)
+        val doc = Ksoup.parse(loginPage)
 
         val token = doc.selectFirst("input[name=__RequestVerificationToken]")?.attr("value")
             ?: throw Exception("Could not find verification token on login page")
