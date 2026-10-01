@@ -7,21 +7,19 @@ import kotlinx.datetime.toLocalDateTime
 import kotlin.collections.ifEmpty
 import kotlin.time.Clock
 
-fun main() {
-    val user = ""
-    val pass = ""
+fun main() = runBlocking {
+    val user = "s796569"
+    val pass = "brow5560"
 
-    val acc = runBlocking { Account.createAndLogin(user, pass) }
+    val acc = Account.createAndLogin(user, pass)
 
-    val classes = runBlocking {
-        acc.getClasses(1)
-    }
+    val classes = acc.getClasses(1)
 
     val nowDate = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date
     val importantAssignments = mutableListOf<Assignment>()
     for (klass in classes) {
         val filterAfterNow = klass.assignments.filter { a ->
-            nowDate.daysUntil(a.dateDue) >= 0
+            a.dropped
         }.ifEmpty { continue }
         importantAssignments.addAll(filterAfterNow)
     }
@@ -36,7 +34,7 @@ fun main() {
         println("{---Category: ${category.name}")
     }
 
-    runBlocking {
-        println(acc.returnEstimatedQuarterGPA(1))
-    }
+    classes.forEach { println(it) }
+
+    println(acc.returnEstimatedQuarterGPA(1))
 }

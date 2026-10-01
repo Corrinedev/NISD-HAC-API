@@ -6,7 +6,7 @@ data class Class(
     val name: String,
     val assignments: List<Assignment>,
     val categories: List<Category>,
-    val classPeriod: Int,
+    val classPeriod: IntRange,
     val displayedAverage: Double,
     val teacher: Teacher,
     val room: String,
@@ -18,14 +18,28 @@ data class Assignment(
     val dateDue: LocalDate,
     val dateAssigned: LocalDate,
     val category: Category,
-    val score: Double?,
+    val score: Score,
     val totalPoints: Double,
     val weightedScore: Double?,
     val weight: Double,
     val weightedTotalPoints: Double,
-    val averageScore: Double?
+    val averageScore: Double?,
+    val dropped: Boolean = false
 )
+
+data class Score(val score: Double?, val missing: Boolean = false, val excused: Boolean = false) {
+    override fun toString(): String {
+        if(missing) return "M - Missing"
+        if(excused) return "EX - Excused"
+        if(score == null) return "Ungraded"
+        return "$score"
+    }
+}
 
 data class Category(val name: String, val points: Double)
 
-data class Teacher(val name: String, val email: String)
+data class Teacher(val name: String, val email: String) {
+    override fun toString(): String {
+       return "Name: $name, Email: $email"
+    }
+}

@@ -14,9 +14,17 @@ repositories {
 }
 
 kotlin {
+    //Desktop
     macosArm64()   // Apple Silicon macOS
     linuxX64()     // Linux on x86_64
     mingwX64()     // Windows x86_64
+
+    //Mobile
+    //androidTarget {
+    //    publishLibraryVariants("release") //AAR
+    //}
+    iosArm64()          // Physical iOS devices
+    iosSimulatorArm64() // Mac M1/M2/M3 simulators
 
     sourceSets {
         commonMain.dependencies {
@@ -68,6 +76,31 @@ kotlin {
             executable {
                 baseName = "testApp"
                 entryPoint = "main" // Tells it to look for a standard fun main()
+            }
+        }
+    }
+}
+
+publishing {
+    publications {
+        // Gradle automatically creates a "kotlinMultiplatform" publication under the hood
+        // that links the Android AAR and iOS KLIBs together.
+        withType<MavenPublication> {
+            // Optional customized naming info:
+            // groupId = "com.yourname"
+            // artifactId = "mylibrary"
+            // version = "1.0.0"
+        }
+    }
+
+    // 4. Point to your repository (e.g., GitHub Packages, Maven Central, or Local)
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://github.com")
+            credentials {
+                username = project.findProperty("gpr.user") as String? ?: System.getenv("GITHUB_ACTOR")
+                password = project.findProperty("gpr.key") as String? ?: System.getenv("GITHUB_TOKEN")
             }
         }
     }

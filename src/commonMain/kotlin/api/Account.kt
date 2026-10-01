@@ -84,7 +84,7 @@ class Account private constructor(private var username: String, private var pass
 
     suspend fun returnWeightedGpa(): Float {
         return _returnRegistrationTableContents()[0]
-            ?.text()?.trim()?.filter { it.isDigit() || it == '.'}?.toFloat() ?: -1f
+            .text().trim().filter { it.isDigit() || it == '.'}.toFloat()
     }
 
     suspend fun returnEstimatedQuarterGPA(quarter: Int, weighted: Boolean = true): Double {
@@ -161,10 +161,12 @@ class Account private constructor(private var username: String, private var pass
                 val rawstr = raw.toString()
                 val email = rawstr.substring(rawstr.indexOfFirst { c-> c == ':' } + 1, rawstr.length - 1).let { str -> str.substring(0, str.indexOfFirst { c -> c == ' ' }) }
                 val cells = raw.map { it.text().trim() }
-
+                val periods = cells[2].split(" - ")
                 scheduleInfo[cells[1]] = mutableMapOf(
-                    "courseId" to cells[0].let { it.substring(0, it.indexOfFirst { c-> c == ' ' }).toIntOrNull() ?: -1 },
-                    "period" to cells[2].toInt(),
+                    "courseId" to cells[0].let { it.substring(0, it.indexOfFirst { c-> !c.isDigit() }).toIntOrNull() ?: -1 },
+                    "period" to periods.let {
+                        (periods[0].toIntOrNull() ?: -1)..(periods[periods.size -1].toIntOrNull() ?: -1)
+                    },
                     "teacher" to Teacher(cells[3], email),
                     "room" to cells[4]
                 )
@@ -173,6 +175,8 @@ class Account private constructor(private var username: String, private var pass
 
         data.forEach { map ->
             val className = map["class"] as String
+            if(scheduleInfo[className] == null)
+                return@forEach
 
             val categories = (map["categories"] as List<Map<String, Any>>).map { e -> Category(e["name"] as String, e["points"] as? Double ?: 0.0) }
 
@@ -182,12 +186,13 @@ class Account private constructor(private var username: String, private var pass
                     LocalDate.parseOrNull((e["dateDue"] as String), AMERICAN_DATE_FORMAT) ?: LocalDate.fromEpochDays(0L),
                     LocalDate.parseOrNull((e["dateDue"] as String), AMERICAN_DATE_FORMAT) ?: LocalDate.fromEpochDays(0L),
                     categories.find { c -> c.name == e["category"] as String } ?: Category("MISSING", 0.0),
-                    e["score"] as? Double,
+                    e["score"] as Score,
                     e["totalPoints"] as? Double ?: 0.0,
                     e["weightedScore"] as? Double,
                     e["weight"] as? Double ?: 0.0,
                     e["weightedTotalPoints"] as? Double ?: 0.0,
                     e["averageScore"] as? Double,
+                    e["dropped"] as? Boolean ?: false
                     )
             }
 
@@ -195,14 +200,13 @@ class Account private constructor(private var username: String, private var pass
                 className,
                 assignments,
                 categories,
-                scheduleInfo[className]?.get("period") as? Int ?: -1,
+                scheduleInfo[className]?.get("period") as? IntRange ?: -1..-1,
                 (map["average"] as? Double) ?: 0.0,
                 (scheduleInfo[className]?.get("teacher")) as Teacher,
                 scheduleInfo[className]?.get("room") as? String ?: "",
                 scheduleInfo[className]?.get("courseId") as? Int ?: -1,
             ))
         }
-
 
         return classes
     }
@@ -283,6 +287,8 @@ class Account private constructor(private var username: String, private var pass
 
             val assignments = classDiv.select("tr.sg-asp-table-data-row").mapNotNull { row ->
                 val cells = row.select("td").map { it.text().trim() }
+                val rawCells = row.select("td")
+                val dropped = rawCells.select("td[style=text-decoration: line-through;]").isNotEmpty()
                 if (cells.size < 9) return@mapNotNull null
 
                 mapOf(
@@ -290,12 +296,13 @@ class Account private constructor(private var username: String, private var pass
                     "dateAssigned"        to cells[1],
                     "title"               to cells[2].substring(0, cells[2].length - 2), // substring to remove the ' *' at the end of all assignment names in html
                     "category"            to cells[3],
-                    "score"               to getNullableDoubleFromString(cells[4]),
+                    "score"               to getScoreFromString(cells[4]),
                     "totalPoints"         to getSafeDoubleFromString(cells[5]),
                     "weight"              to getSafeDoubleFromString(cells[6]),
                     "weightedScore"       to getNullableDoubleFromString(cells[7]),
                     "weightedTotalPoints" to getSafeDoubleFromString(cells[8]),
                     "averageScore"        to getNullableDoubleFromString(cells[9]),
+                    "dropped"             to dropped
                 )
             }
 
@@ -336,5 +343,14 @@ class Account private constructor(private var username: String, private var pass
     fun getNullableDoubleFromString(str: String): Double? {
         return str.toDoubleOrNull()
             ?: str.substringBefore(".").toDoubleOrNull()
+    }
+
+    fun getScoreFromString(str: String): Score {
+        return when(str) {
+            "M - Missing Assignment" -> Score(null, missing = true, excused = false)
+            "EX - Excused Assignment" -> Score(null, missing = false, excused = true)
+            else -> Score(str.toDoubleOrNull()
+                ?: str.substringBefore(".").toDoubleOrNull())
+        }
     }
 }
