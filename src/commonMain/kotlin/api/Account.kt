@@ -3,28 +3,45 @@ package com.cdv.hac.api
 import com.fleeksoft.ksoup.Ksoup
 import com.fleeksoft.ksoup.nodes.Document
 import com.fleeksoft.ksoup.select.Elements
+import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.request
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.format.char
+import kotlinx.datetime.parseOrNull
 
 const val ASSIGNMENTS_URL = "https://hac.nisd.net/HomeAccess/Content/Student/Assignments.aspx"
 const val CLASSES_URL     = "https://hac.nisd.net/HomeAccess/Content/Student/Classes.aspx"
 const val TRANSCRIPT_URL  = "https://hac.nisd.net/HomeAccess/Content/Student/Registration.aspx"
-const val LOGIN_URL       = "https://hac.nisd.net/HomeAccess/Account/LogOn?ReturnUrl=%2fHomeAccess%2f"
+const val LOGIN_URL       = "https://hac.nisd.net/HomeAccess/Account/LogOn"
 const val BASE_URL        = "https://hac.nisd.net"
 
-class Account(private var username: String, private var password: String) {
+val AMERICAN_DATE_FORMAT = LocalDate.Format {
+    monthNumber()
+    char('/')
+    day()
+    char('/')
+    year()
+}
+
+class Account private constructor(private var username: String, private var password: String) {
 
     private val cookies = mutableMapOf<String, String>()
 
-
-
-    init { login() }
+    companion object {
+        suspend fun createAndLogin(username: String, password: String): Account {
+            val account = Account(username, password)
+            account.login() // Safely suspends without runBlocking
+            return account
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Auth
     // -------------------------------------------------------------------------
 
     private suspend fun login() {
-        val loginPage = get(LOGIN_URL, cookies = cookies)
-        val doc = Ksoup.parse(loginPage)
+        val loginPageResponse = get(LOGIN_URL)
+        val doc = Ksoup.parse(loginPageResponse.bodyAsText())
 
         val token = doc.selectFirst("input[name=__RequestVerificationToken]")?.attr("value")
             ?: throw Exception("Could not find verification token on login page")
@@ -37,16 +54,17 @@ class Account(private var username: String, private var password: String) {
             "LogOnDetails.UserName"      to username
         )
 
-        val (_, location) = postNoRedirect(LOGIN_URL, payload, referer = LOGIN_URL, cookies = cookies)
+        // Execute post login
+        val finalResponse = post(LOGIN_URL, payload, referer = LOGIN_URL)
+        val finalHtml = finalResponse.bodyAsText()
 
-        if (location == null || location.contains("LogOn", ignoreCase = true)) {
+        // If the server leaves us on the login page or displays the validation alert, login failed
+        if (finalResponse.request.url.toString().contains("LogOn", ignoreCase = true) || finalHtml.contains("Invalid username or password")) {
             throw InvalidCredentialsException()
         }
-
-        get(if (location.startsWith("http")) location else "$BASE_URL$location", cookies = cookies)
     }
 
-    fun reset() {
+    suspend fun reset() {
         cookies.clear()
         login()
     }
@@ -60,16 +78,16 @@ class Account(private var username: String, private var password: String) {
     // Public API
     // -------------------------------------------------------------------------
 
-    fun getClasses(quarter: Int): List<Class> {
+    suspend fun getClasses(quarter: Int): List<Class> {
         return cachedAssignments.getOrPut(quarter) { getClassesFromDocument(quarter) }
     }
 
-    fun returnWeightedGpa(): Float {
+    suspend fun returnWeightedGpa(): Float {
         return _returnRegistrationTableContents()[0]
             ?.text()?.trim()?.filter { it.isDigit() || it == '.'}?.toFloat() ?: -1f
     }
 
-    fun returnEstimatedQuarterGPA(quarter: Int, weighted: Boolean = true): Double {
+    suspend fun returnEstimatedQuarterGPA(quarter: Int, weighted: Boolean = true): Double {
         val classes = getClasses(quarter)
         val weightedAverages = mutableListOf<Double>()
         for ((name, _, _, _, displayedAverage) in classes) {
@@ -92,11 +110,11 @@ class Account(private var username: String, private var password: String) {
         else { 0.0 }
     }
 
-    fun returnFullRank(): String {
+    suspend fun returnFullRank(): String {
         return _returnRegistrationTableContents()[1]?.text() ?: "Error fetching rank"
     }
 
-    fun returnRank(): Int {
+    suspend fun returnRank(): Int {
         val fr = returnFullRank()
         val firstNum = fr.indexOfFirst(Char::isDigit)
         var lastNumIndex = firstNum
@@ -108,16 +126,16 @@ class Account(private var username: String, private var password: String) {
         return fr.substring(firstNum, lastNumIndex).toInt()
     }
 
-    fun returnAddress(): String {
+    suspend fun returnAddress(): String {
         val fr = returnFullAddress()
         return fr.substring(fr.indexOfFirst(Char::isDigit))
     }
 
-    fun returnFullAddress(): String {
+    suspend fun returnFullAddress(): String {
         return _returnContactTableContents().first()?.getElementsByTag("tr")?.first()?.getElementsByTag("td")[0]?.text()?.split(',')[0] ?: ""
     }
 
-    fun returnCollegeGpa(): Float {
+    suspend fun returnCollegeGpa(): Float {
         return (returnWeightedGpa() / 100) * 4.0f
     }
 
@@ -128,11 +146,11 @@ class Account(private var username: String, private var password: String) {
     
     private val cachedAssignments = mutableMapOf<Int, List<Class>>()
 
-    private fun getClassesFromDocument(quarter: Int? = null): List<Class> {
+    private suspend fun getClassesFromDocument(quarter: Int? = null): List<Class> {
         val classes = mutableListOf<Class>()
         val quarter: Int = quarter ?: -1
-        val doc = Jsoup.parse(fetchAssignmentsPage(quarter))
-        val scheduleDoc = Jsoup.parse(fetchClassesPage())
+        val doc = Ksoup.parse(fetchAssignmentsPage(quarter))
+        val scheduleDoc = Ksoup.parse(fetchClassesPage())
         val data = parseHacData(doc)
 
         val scheduleInfo = mutableMapOf<String, Map<String, Any>>()
@@ -161,8 +179,8 @@ class Account(private var username: String, private var password: String) {
             val assignments = (map["assignments"] as List<Map<String, Any>>).map { e ->
                 Assignment(
                     e["title"] as String,
-                    Date((e["dateDue"] as String).ifEmpty { "01/01/1999" }),
-                    Date((e["dateAssigned"] as String).ifEmpty { "01/01/1999" }),
+                    LocalDate.parseOrNull((e["dateDue"] as String), AMERICAN_DATE_FORMAT) ?: LocalDate.fromEpochDays(0L),
+                    LocalDate.parseOrNull((e["dateDue"] as String), AMERICAN_DATE_FORMAT) ?: LocalDate.fromEpochDays(0L),
                     categories.find { c -> c.name == e["category"] as String } ?: Category("MISSING", 0.0),
                     e["score"] as? Double,
                     e["totalPoints"] as? Double ?: 0.0,
@@ -189,12 +207,12 @@ class Account(private var username: String, private var password: String) {
         return classes
     }
 
-    private fun fetchAssignmentsPage(quarter: Int?): String {
-        val html = get(ASSIGNMENTS_URL, referer = ASSIGNMENTS_URL, cookies = cookies)
+    private suspend fun fetchAssignmentsPage(quarter: Int?): String {
+        val html = get(ASSIGNMENTS_URL, referer = ASSIGNMENTS_URL).bodyAsText()
         if (quarter == null || quarter == -1 /* placeholder for default html used for cached map indexing in #getCachedAssignments */)
             return html
 
-        val doc = Jsoup.parse(html)
+        val doc = Ksoup.parse(html)
         val quarterValue = getQuarterValue(doc, quarter)
         val payload = getFormTokens(doc).toMutableMap().apply {
             put("ctl00\$plnMain\$ddlReportCardRuns", quarterValue)
@@ -202,24 +220,24 @@ class Account(private var username: String, private var password: String) {
             put("ctl00\$plnMain\$ddlOrderBy", "Class")
             put("__EVENTTARGET", "ctl00\$plnMain\$btnRefreshView")
         }
-        return post(ASSIGNMENTS_URL, payload, referer = ASSIGNMENTS_URL, cookies = cookies)
+        return post(ASSIGNMENTS_URL, payload, referer = ASSIGNMENTS_URL).bodyAsText()
     }
 
-    private fun fetchClassesPage(): String {
-        val html = get(CLASSES_URL, referer = CLASSES_URL, cookies = cookies)
+    private suspend fun fetchClassesPage(): String {
+        val html = get(CLASSES_URL, referer = CLASSES_URL).bodyAsText()
 
-        val doc = Jsoup.parse(html)
+        val doc = Ksoup.parse(html)
         val payload = getFormTokens(doc)
-        return post(CLASSES_URL, payload, referer = CLASSES_URL, cookies = cookies)
+        return post(CLASSES_URL, payload, referer = CLASSES_URL).bodyAsText()
     }
 
     private var cachedTranscript: Document? = null
 
-    fun getTranscript(): Document {
-        return cachedTranscript ?: Jsoup.parse(fetchTranscript()).also { cachedTranscript = it }
+    suspend fun getTranscript(): Document {
+        return cachedTranscript ?: Ksoup.parse(fetchTranscript()).also { cachedTranscript = it }
     }
 
-    private fun fetchTranscript(): String = get(TRANSCRIPT_URL, referer = TRANSCRIPT_URL, cookies = cookies)
+    private suspend fun fetchTranscript(): String = get(TRANSCRIPT_URL, referer = TRANSCRIPT_URL).bodyAsText()
 
     private fun getFormTokens(doc: Document): Map<String, String> =
         listOf("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION",
@@ -233,7 +251,7 @@ class Account(private var username: String, private var password: String) {
         return if (quarter <= options.size) options[quarter - 1] else "$quarter-${getSchoolYear()}"
     }
 
-    private fun _returnRegistrationTableContents(): Elements {
+    private suspend fun _returnRegistrationTableContents(): Elements {
         val doc = getTranscript()
         return doc
             .getElementById("MainContent")
@@ -243,7 +261,7 @@ class Account(private var username: String, private var password: String) {
             ?.getElementsByClass("sg-standard-width")!!
     }
 
-    private fun _returnContactTableContents(): Elements {
+    private suspend fun _returnContactTableContents(): Elements {
         val doc = getTranscript()
 
         return doc.getElementById("MainContent")

@@ -1,90 +1,83 @@
 package com.cdv.hac.api
 
 import io.ktor.client.*
-import io.ktor.client.engine.*
 import io.ktor.client.plugins.*
+import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.*
+import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
-import io.ktor.util.*
 
 // Global or shared Ktor HttpClient configuration
 val client = HttpClient {
     // Disable automatic redirect handling so we can intercept
     // redirects manually inside "postNoRedirect"
     followRedirects = false
+    expectSuccess = false // Prevents automatic routing panics on redirects
+    install(HttpCookies)
+    HttpResponseValidator {
+        // Tells Ktor to skip throwing exceptions when the raw decompressed
+        // byte count differs from the server's compressed header definition
+        validateResponse { response ->
+            // Leave empty or add your custom status code checks (e.g., 404 handling)
+        }
+    }
 
     // Default browser headers
     defaultRequest {
         header(HttpHeaders.UserAgent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36")
         header(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
         header(HttpHeaders.AcceptLanguage, "en-US,en;q=0.5")
+
+        header(HttpHeaders.AcceptEncoding, "identity")
+    }
+
+}
+
+
+private fun HttpRequestBuilder.applyCommonHeaders(referer: String?) {
+    referer?.let { header(HttpHeaders.Referrer, it) }
+}
+
+// Helper to resolve relative redirects dynamically based on the current request domain
+private fun resolveAbsoluteUrl(currentUrl: String, redirectLocation: String): String {
+    return if (redirectLocation.startsWith("http")) {
+        redirectLocation
+    } else {
+        val origin = Url(currentUrl)
+        "${origin.protocol.name}://${origin.hostWithPort}$redirectLocation"
     }
 }
 
-// Helper function to build headers (Cookies and Referer)
-private fun HttpRequestBuilder.applyCommonHeaders(referer: String?, cookies: Map<String, String>) {
-    referer?.let { header(HttpHeaders.Referer, it) }
-    if (cookies.isNotEmpty()) {
-        val cookieString = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        header(HttpHeaders.Cookie, cookieString)
-    }
-}
-
-// Intercepts response headers to manually track cookies
-private fun storeCookies(response: HttpResponse, cookies: MutableMap<String, String>) {
-    response.headers.getAll(HttpHeaders.SetCookie)?.forEach { header ->
-        val cookiePart = header.split(";").first().trim()
-        val eqIdx = cookiePart.indexOf('=')
-        if (eqIdx > 0) {
-            cookies[cookiePart.substring(0, eqIdx)] = cookiePart.substring(eqIdx + 1)
-        }
-    }
-}
-
-suspend fun get(urlStr: String, referer: String? = null, cookies: MutableMap<String, String>): String {
+suspend fun get(urlStr: String, referer: String? = null): HttpResponse {
     val response = client.get(urlStr) {
-        applyCommonHeaders(referer, cookies)
+        applyCommonHeaders(referer)
     }
-    storeCookies(response, cookies)
 
-    // Ktor handles redirects natively if enabled, but since followRedirects = false globally,
-    // manual handling is required here if a 3xx status is returned:
+    // 2. Handle manual redirect chains sequentially so cookies save perfectly
     return if (response.status.value in 300..399) {
-        val redirectUrl = response.headers[HttpHeaders.Location] ?: return response.bodyAsText()
-        get(redirectUrl, referer, cookies) // Follow redirect
+        val redirectUrl = response.headers[HttpHeaders.Location] ?: return response
+        val absoluteUrl = resolveAbsoluteUrl(urlStr, redirectUrl)
+        get(absoluteUrl, referer = urlStr)
     } else {
-        response.bodyAsText()
+        response
     }
 }
 
-suspend fun post(urlStr: String, data: Map<String, String>, referer: String?, cookies: MutableMap<String, String>): String {
+suspend fun post(urlStr: String, data: Map<String, String>, referer: String?): HttpResponse {
     val response = client.post(urlStr) {
-        applyCommonHeaders(referer, cookies)
-        // Ktor handles form URL encoding safely across platforms
+        applyCommonHeaders(referer)
         setBody(FormDataContent(Parameters.build {
             data.forEach { (key, value) -> append(key, value) }
         }))
     }
-    storeCookies(response, cookies)
 
     return if (response.status.value in 300..399) {
-        val redirectUrl = response.headers[HttpHeaders.Location] ?: return response.bodyAsText()
-        get(redirectUrl, referer, cookies) // Follow redirect via GET
+        val redirectUrl = response.headers[HttpHeaders.Location] ?: return response
+        val absoluteUrl = resolveAbsoluteUrl(urlStr, redirectUrl)
+        get(absoluteUrl, referer = urlStr) // Switch to GET on redirect per standard HTTP guidelines
     } else {
-        response.bodyAsText()
+        response
     }
 }
 
-suspend fun postNoRedirect(urlStr: String, data: Map<String, String>, referer: String?, cookies: MutableMap<String, String>): Pair<String, String?> {
-    val response = client.post(urlStr) {
-        applyCommonHeaders(referer, cookies)
-        setBody(FormDataContent(Parameters.build {
-            data.forEach { (key, value) -> append(key, value) }
-        }))
-    }
-    storeCookies(response, cookies)
-
-    val location = response.headers[HttpHeaders.Location]
-    return Pair(response.bodyAsText(), location)
-}

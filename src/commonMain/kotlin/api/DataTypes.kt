@@ -1,6 +1,6 @@
 package com.cdv.hac.api
 
-import java.util.Date
+import kotlinx.datetime.LocalDate
 
 data class Class(
     val name: String,
@@ -15,8 +15,8 @@ data class Class(
 
 data class Assignment(
     val name: String,
-    val dateDue: Date,
-    val dateAssigned: Date,
+    val dateDue: LocalDate,
+    val dateAssigned: LocalDate,
     val category: Category,
     val score: Double?,
     val totalPoints: Double,
