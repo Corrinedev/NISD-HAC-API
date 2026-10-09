@@ -8,8 +8,8 @@ import kotlin.collections.ifEmpty
 import kotlin.time.Clock
 
 fun main() = runBlocking {
-    val user = "s796569"
-    val pass = "brow5560"
+    val user = "s795931"
+    val pass = "trux5441"
 
     val acc = Account.createAndLogin(user, pass)
 

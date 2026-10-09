@@ -8,18 +8,12 @@ import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 
-// Global or shared Ktor HttpClient configuration
 val client = HttpClient {
-    // Disable automatic redirect handling so we can intercept
-    // redirects manually inside "postNoRedirect"
     followRedirects = false
-    expectSuccess = false // Prevents automatic routing panics on redirects
+    expectSuccess = false
     install(HttpCookies)
     HttpResponseValidator {
-        // Tells Ktor to skip throwing exceptions when the raw decompressed
-        // byte count differs from the server's compressed header definition
         validateResponse { response ->
-            // Leave empty or add your custom status code checks (e.g., 404 handling)
         }
     }
 
@@ -39,7 +33,6 @@ private fun HttpRequestBuilder.applyCommonHeaders(referer: String?) {
     referer?.let { header(HttpHeaders.Referrer, it) }
 }
 
-// Helper to resolve relative redirects dynamically based on the current request domain
 private fun resolveAbsoluteUrl(currentUrl: String, redirectLocation: String): String {
     return if (redirectLocation.startsWith("http")) {
         redirectLocation
@@ -54,7 +47,6 @@ suspend fun get(urlStr: String, referer: String? = null): HttpResponse {
         applyCommonHeaders(referer)
     }
 
-    // 2. Handle manual redirect chains sequentially so cookies save perfectly
     return if (response.status.value in 300..399) {
         val redirectUrl = response.headers[HttpHeaders.Location] ?: return response
         val absoluteUrl = resolveAbsoluteUrl(urlStr, redirectUrl)
@@ -75,7 +67,7 @@ suspend fun post(urlStr: String, data: Map<String, String>, referer: String?): H
     return if (response.status.value in 300..399) {
         val redirectUrl = response.headers[HttpHeaders.Location] ?: return response
         val absoluteUrl = resolveAbsoluteUrl(urlStr, redirectUrl)
-        get(absoluteUrl, referer = urlStr) // Switch to GET on redirect per standard HTTP guidelines
+        get(absoluteUrl, referer = urlStr)
     } else {
         response
     }

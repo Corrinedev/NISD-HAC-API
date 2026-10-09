@@ -14,6 +14,9 @@ repositories {
 }
 
 kotlin {
+    //JVM
+    jvm()
+
     //Desktop
     macosArm64()   // Apple Silicon macOS
     linuxX64()     // Linux on x86_64
@@ -32,29 +35,25 @@ kotlin {
             implementation("com.fleeksoft.ksoup:ksoup-network:0.2.5") {
                 exclude(group = "com.fleeksoft.io", module = "io")
             }
-            // Force the app to use the newer 'io-core' module
-            implementation("com.fleeksoft.io:io-core:0.0.4")
+            implementation("com.fleeksoft.io:io-core:0.0.4") //use a newer io-core module than implemented in ksoup-network
             implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.8.0")
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
 
-        // ADD THIS: Engine for Apple Silicon Mac Execution
         val macosArm64Main by getting {
             dependencies {
                 implementation("io.ktor:ktor-client-darwin:3.0.0")
             }
         }
 
-        // ADD THIS: Engine for Linux Execution
         val linuxX64Main by getting {
             dependencies {
                 implementation("io.ktor:ktor-client-curl:3.0.0")
             }
         }
 
-        // ADD THIS: Engine for Windows Execution
         val mingwX64Main by getting {
             dependencies {
                 implementation("io.ktor:ktor-client-winhttp:3.0.0")
@@ -71,20 +70,12 @@ kotlin {
             sharedLib {
                 baseName = "corrinenativelib"
             }
-
-            // ADD THIS: Generates a runnable native application for testing
-            executable {
-                baseName = "testApp"
-                entryPoint = "main" // Tells it to look for a standard fun main()
-            }
         }
     }
 }
 
 publishing {
     publications {
-        // Gradle automatically creates a "kotlinMultiplatform" publication under the hood
-        // that links the Android AAR and iOS KLIBs together.
         withType<MavenPublication> {
             // Optional customized naming info:
             // groupId = "com.yourname"
@@ -93,7 +84,6 @@ publishing {
         }
     }
 
-    // 4. Point to your repository (e.g., GitHub Packages, Maven Central, or Local)
     repositories {
         maven {
             name = "GitHubPackages"
