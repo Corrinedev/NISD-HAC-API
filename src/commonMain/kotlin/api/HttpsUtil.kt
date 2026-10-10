@@ -8,26 +8,7 @@ import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 
-val client = HttpClient {
-    followRedirects = false
-    expectSuccess = false
-    install(HttpCookies)
-    HttpResponseValidator {
-        validateResponse { response ->
-        }
-    }
-
-    // Default browser headers
-    defaultRequest {
-        header(HttpHeaders.UserAgent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36")
-        header(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-        header(HttpHeaders.AcceptLanguage, "en-US,en;q=0.5")
-
-        header(HttpHeaders.AcceptEncoding, "identity")
-    }
-
-}
-
+private const val MAX_REDIRECTS = 7
 
 private fun HttpRequestBuilder.applyCommonHeaders(referer: String?) {
     referer?.let { header(HttpHeaders.Referrer, it) }
@@ -42,26 +23,31 @@ private fun resolveAbsoluteUrl(currentUrl: String, redirectLocation: String): St
     }
 }
 
-suspend fun get(urlStr: String, referer: String? = null): HttpResponse {
-    val response = client.get(urlStr) {
-        applyCommonHeaders(referer)
-    }
+suspend fun Account.get(urlStr: String, referer: String? = null): HttpResponse {
+    var currentUrl = urlStr
+    var currentReferer = referer
+    var redirectCount = 0
 
-    return if (response.status.value in 300..399) {
-        val redirectUrl = response.headers[HttpHeaders.Location] ?: return response
-        val absoluteUrl = resolveAbsoluteUrl(urlStr, redirectUrl)
-        get(absoluteUrl, referer = urlStr)
-    } else {
-        response
+    while (true) {
+        val response = client.get(currentUrl) {
+            applyCommonHeaders(currentReferer)
+        }
+
+        if (response.status.value in 300..399 && redirectCount < MAX_REDIRECTS) {
+            val redirectUrl = response.headers[HttpHeaders.Location] ?: return response
+            currentReferer = currentUrl
+            currentUrl = resolveAbsoluteUrl(currentUrl, redirectUrl)
+            redirectCount++
+        } else {
+            return response
+        }
     }
 }
 
-suspend fun post(urlStr: String, data: Map<String, String>, referer: String?): HttpResponse {
+suspend fun Account.post(urlStr: String, data: Map<String, String>, referer: String?): HttpResponse {
     val response = client.post(urlStr) {
         applyCommonHeaders(referer)
-        setBody(FormDataContent(Parameters.build {
-            data.forEach { (key, value) -> append(key, value) }
-        }))
+        setBody(FormDataContent(parametersOf(data.mapValues { listOf(it.value) })))
     }
 
     return if (response.status.value in 300..399) {

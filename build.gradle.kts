@@ -37,6 +37,8 @@ kotlin {
             }
             implementation("com.fleeksoft.io:io-core:0.0.4") //use a newer io-core module than implemented in ksoup-network
             implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.8.0")
+            implementation("io.ktor:ktor-client-encoding:3.6.0")
+
         }
         commonTest.dependencies {
             implementation(kotlin("test"))

@@ -3,8 +3,15 @@ package com.cdv.hac.api
 import com.fleeksoft.ksoup.Ksoup
 import com.fleeksoft.ksoup.nodes.Document
 import com.fleeksoft.ksoup.select.Elements
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpResponseValidator
+import io.ktor.client.plugins.compression.ContentEncoding
+import io.ktor.client.plugins.cookies.HttpCookies
+import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.request
+import io.ktor.http.HttpHeaders
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.format.char
 import kotlinx.datetime.parseOrNull
@@ -24,6 +31,21 @@ val AMERICAN_DATE_FORMAT = LocalDate.Format {
 }
 
 class Account private constructor(private var username: String, private var password: String) {
+    internal val client = HttpClient {
+        followRedirects = false
+        expectSuccess = false
+        install(HttpCookies)
+        install(ContentEncoding) {
+            gzip()
+            deflate()
+        }
+
+        defaultRequest {
+            header(HttpHeaders.UserAgent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36")
+            header(HttpHeaders.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            header(HttpHeaders.AcceptLanguage, "en-US,en;q=0.5")
+        }
+    }
 
     private val cookies = mutableMapOf<String, String>()
 
@@ -111,7 +133,7 @@ class Account private constructor(private var username: String, private var pass
     }
 
     suspend fun returnFullRank(): String {
-        return _returnRegistrationTableContents()[1]?.text() ?: "Error fetching rank"
+        return _returnRegistrationTableContents()[1].text()
     }
 
     suspend fun returnRank(): Int {
@@ -157,18 +179,24 @@ class Account private constructor(private var username: String, private var pass
 
         scheduleDoc.selectFirst("table[id~=plnMain_dgSchedule]")?.run {
             select("tr.sg-asp-table-data-row").mapNotNull { row ->
-                val raw = row.select("td")
-                val rawstr = raw.toString()
-                val email = rawstr.substring(rawstr.indexOfFirst { c-> c == ':' } + 1, rawstr.length - 1).let { str -> str.substring(0, str.indexOfFirst { c -> c == ' ' }) }
-                val cells = raw.map { it.text().trim() }
-                val periods = cells[2].split(" - ")
-                scheduleInfo[cells[1]] = mutableMapOf(
-                    "courseId" to cells[0].let { it.substring(0, it.indexOfFirst { c-> !c.isDigit() }).toIntOrNull() ?: -1 },
-                    "period" to periods.let {
-                        (periods[0].toIntOrNull() ?: -1)..(periods[periods.size -1].toIntOrNull() ?: -1)
-                    },
-                    "teacher" to Teacher(cells[3], email),
-                    "room" to cells[4]
+                val cells = row.select("td")
+                if (cells.size < 5) return@mapNotNull null
+
+                val courseText = cells[0].text().trim()
+                val className = cells[1].text().trim()
+                val period = cells[2].text().trim()
+                val teacherName = cells[3].text().trim()
+                val room = cells[4].text().trim()
+                val email = cells[3].selectFirst("a[href^=mailto:]")
+                    ?.attr("href")
+                    ?.removePrefix("mailto:")
+                    ?: ""
+
+                scheduleInfo[className] = mapOf(
+                    "courseId" to courseText.takeWhile(Char::isDigit).toIntOrNull().let { it ?: -1 },
+                    "period" to period,
+                    "teacher" to Teacher(teacherName, email),
+                    "room" to room
                 )
             }
         }
@@ -180,12 +208,13 @@ class Account private constructor(private var username: String, private var pass
 
             val categories = (map["categories"] as List<Map<String, Any>>).map { e -> Category(e["name"] as String, e["points"] as? Double ?: 0.0) }
 
+            val categoryByName = categories.associateBy(Category::name)
             val assignments = (map["assignments"] as List<Map<String, Any>>).map { e ->
                 Assignment(
                     e["title"] as String,
-                    LocalDate.parseOrNull((e["dateDue"] as String), AMERICAN_DATE_FORMAT) ?: LocalDate.fromEpochDays(0L),
-                    LocalDate.parseOrNull((e["dateDue"] as String), AMERICAN_DATE_FORMAT) ?: LocalDate.fromEpochDays(0L),
-                    categories.find { c -> c.name == e["category"] as String } ?: Category("MISSING", 0.0),
+                    LocalDate.parseOrNull(e["dateDue"] as String, AMERICAN_DATE_FORMAT) ?: LocalDate.fromEpochDays(0L),
+                    LocalDate.parseOrNull(e["dateAssigned"] as String, AMERICAN_DATE_FORMAT) ?: LocalDate.fromEpochDays(0L),
+                    categoryByName[e["category"] as String] ?: Category("MISSING", 0.0),
                     e["score"] as Score,
                     e["totalPoints"] as? Double ?: 0.0,
                     e["weightedScore"] as? Double,
@@ -193,14 +222,13 @@ class Account private constructor(private var username: String, private var pass
                     e["weightedTotalPoints"] as? Double ?: 0.0,
                     e["averageScore"] as? Double,
                     e["dropped"] as? Boolean ?: false
-                    )
+                )
             }
-
             classes.add(Class(
                 className,
                 assignments,
                 categories,
-                scheduleInfo[className]?.get("period") as? IntRange ?: -1..-1,
+                getClassPeriodsFromString(scheduleInfo[className]?.get("period") as? String ?: ""),
                 (map["average"] as? Double) ?: 0.0,
                 (scheduleInfo[className]?.get("teacher")) as Teacher,
                 scheduleInfo[className]?.get("room") as? String ?: "",
@@ -210,6 +238,11 @@ class Account private constructor(private var username: String, private var pass
 
         return classes
     }
+
+    fun getClassPeriodsFromString(str: String): List<Int> {
+        return str.split(" - ").map { s -> s.toIntOrNull() ?: -1 }
+    }
+
 
     private suspend fun fetchAssignmentsPage(quarter: Int?): String {
         val html = get(ASSIGNMENTS_URL, referer = ASSIGNMENTS_URL).bodyAsText()
@@ -286,15 +319,15 @@ class Account private constructor(private var username: String, private var pass
                 } ?: "Unknown"
 
             val assignments = classDiv.select("tr.sg-asp-table-data-row").mapNotNull { row ->
-                val cells = row.select("td").map { it.text().trim() }
                 val rawCells = row.select("td")
-                val dropped = rawCells.select("td[style=text-decoration: line-through;]").isNotEmpty()
-                if (cells.size < 9) return@mapNotNull null
+                if (rawCells.size < 10) return@mapNotNull null
+                val cells = rawCells.map { it.text().trim() }
+                val dropped = rawCells.any { it.attr("style").contains("line-through", ignoreCase = true) }
 
                 mapOf(
                     "dateDue"             to cells[0],
                     "dateAssigned"        to cells[1],
-                    "title"               to cells[2].substring(0, cells[2].length - 2), // substring to remove the ' *' at the end of all assignment names in html
+                    "title"               to cells[2].removeSuffix(" *"),
                     "category"            to cells[3],
                     "score"               to getScoreFromString(cells[4]),
                     "totalPoints"         to getSafeDoubleFromString(cells[5]),

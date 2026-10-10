@@ -6,7 +6,7 @@ data class Class(
     val name: String,
     val assignments: List<Assignment>,
     val categories: List<Category>,
-    val classPeriod: IntRange,
+    val classPeriod: List<Int>,
     val displayedAverage: Double,
     val teacher: Teacher,
     val room: String,
